@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Отметка прихода</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  /*
+    Цвета берём из темы Telegram: приложение открывается внутри мессенджера,
+    и своя палитра выглядела бы чужеродной, а в тёмной теме — ещё и слепила.
+    Значения после запятой — на случай, если Telegram тему не передал.
+  */
+  :root {
+    --bg: var(--tg-theme-bg-color, #ffffff);
+    --text: var(--tg-theme-text-color, #000000);
+    --hint: var(--tg-theme-hint-color, #707579);
+    --button: var(--tg-theme-button-color, #2481cc);
+    --button-text: var(--tg-theme-button-text-color, #ffffff);
+    --secondary-bg: var(--tg-theme-secondary-bg-color, #f4f4f5);
+    --destructive: var(--tg-theme-destructive-text-color, #e53935);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    padding: 24px 20px calc(24px + env(safe-area-inset-bottom));
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 24px;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  h1 {
+    margin: 0;
+    font-size: 22px;
+    font-weight: 600;
+    text-align: center;
+  }
+
+  .hint {
+    margin: 0;
+    color: var(--hint);
+    font-size: 15px;
+    text-align: center;
+  }
+
+  .card {
+    background: var(--secondary-bg);
+    border-radius: 14px;
+    padding: 16px;
+    display: none;
+    font-size: 15px;
+  }
+
+  .card.shown { display: block; }
+  .card b { font-weight: 600; }
+  .card.error { color: var(--destructive); }
+
+  button {
+    width: 100%;
+    padding: 16px;
+    border: 0;
+    border-radius: 12px;
+    background: var(--button);
+    color: var(--button-text);
+    font-size: 17px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: opacity .15s;
+  }
+
+  button:disabled { opacity: .5; cursor: default; }
+  button.secondary {
+    background: transparent;
+    color: var(--button);
+    padding: 12px;
+    font-size: 15px;
+  }
+
+  .spinner {
+    display: inline-block;
+    width: 15px;
+    height: 15px;
+    margin-right: 8px;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+    vertical-align: -2px;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div>
+  <h1>🏥 Отметка прихода</h1>
+  <p class="hint" id="hint">Нажмите кнопку — приложение определит вашу геолокацию и передаст её боту.</p>
+</div>
+
+<div class="card" id="status"></div>
+
+<div>
+  <button id="checkin">Отметить приход</button>
+  <button class="secondary" id="retry" style="display:none">Попробовать снова</button>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var tg = window.Telegram && window.Telegram.WebApp;
+  var button = document.getElementById("checkin");
+  var retry = document.getElementById("retry");
+  var status = document.getElementById("status");
+  var hint = document.getElementById("hint");
+
+  // Открыто не из Telegram (например, ссылку скопировали в браузер): отправить
+  // данные боту оттуда невозможно, поэтому честно говорим об этом сразу, а не
+  // после нажатия кнопки.
+  var insideTelegram = !!(tg && tg.initData !== undefined && typeof tg.sendData === "function");
+
+  if (tg) {
+    tg.ready();
+    tg.expand();
+  }
+
+  if (!insideTelegram) {
+    show("Эту страницу нужно открывать кнопкой «📍 Отметить приход» в боте, а не в браузере.", true);
+    button.disabled = true;
+  }
+
+  function show(html, isError) {
+    status.innerHTML = html;
+    status.className = isError ? "card shown error" : "card shown";
+  }
+
+  function busy(on) {
+    button.disabled = on;
+    retry.style.display = "none";
+    if (on) {
+      show('<span class="spinner"></span>Определяем вашу геолокацию…', false);
+    }
+  }
+
+  function fail(text) {
+    button.disabled = false;
+    retry.style.display = "block";
+    show(text, true);
+  }
+
+  /*
+    Отправка боту. sendData закрывает приложение и доставляет строку боту как
+    служебное сообщение от этого же пользователя — своего сервера для этого
+    не нужно, а подставить чужой аккаунт нельзя.
+
+    Ограничение sendData — 4096 байт; здесь уезжает меньше сотни.
+  */
+  function send(coords) {
+    var payload = JSON.stringify({
+      lat: coords.latitude,
+      lon: coords.longitude,
+      accuracy: coords.accuracy
+    });
+    show("Отправляем…", false);
+    try {
+      tg.sendData(payload);
+    } catch (e) {
+      fail("Не удалось передать данные боту. Закройте приложение и попробуйте ещё раз.");
+    }
+  }
+
+  /*
+    Геолокация браузера ВСЕГДА возвращает accuracy — в этом главный смысл
+    мини-приложения: точку нельзя выбрать пальцем на карте, как это можно
+    сделать через скрепку → Геопозиция, и бот получает честную точность.
+
+    enableHighAccuracy просит именно GPS, а не приблизительную привязку по сети:
+    без него в помещении легко приходит точность в километр, и отметка
+    не проходит проверку радиуса.
+  */
+  function requestBrowserLocation() {
+    if (!navigator.geolocation) {
+      tryTelegramLocation();
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      function (position) { send(position.coords); },
+      function (error) {
+        // PERMISSION_DENIED = 1. Отказ в доступе не лечится повтором запроса —
+        // менять надо настройки телефона, поэтому текст здесь другой.
+        if (error && error.code === 1) {
+          fail(
+            "<b>Нет доступа к геолокации.</b><br><br>" +
+            "Разрешите Telegram доступ к геопозиции в настройках телефона " +
+            "(Настройки → Приложения → Telegram → Геопозиция) и откройте приложение снова."
+          );
+          return;
+        }
+        tryTelegramLocation();
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  }
+
+  /*
+    Запасной путь — LocationManager самого Telegram (Bot API 8.0). Нужен там,
+    где WebView не отдаёт браузерную геолокацию: тогда координаты запрашивает
+    сам мессенджер. На старых версиях Telegram этого объекта просто нет.
+  */
+  function tryTelegramLocation() {
+    var manager = tg && tg.LocationManager;
+    if (!manager || typeof manager.getLocation !== "function") {
+      fail(
+        "<b>Не удалось определить геолокацию.</b><br><br>" +
+        "Проверьте, что геопозиция включена, и попробуйте снова. " +
+        "Если не помогает — отметьтесь кнопкой «🏥 Я на работе»: она работает всегда."
+      );
+      return;
+    }
+
+    var ask = function () {
+      manager.getLocation(function (location) {
+        if (!location) {
+          fail(
+            "<b>Telegram не дал геолокацию.</b><br><br>" +
+            "Разрешите доступ к геопозиции и попробуйте снова, либо отметьтесь " +
+            "кнопкой «🏥 Я на работе»."
+          );
+          return;
+        }
+        send({
+          latitude: location.latitude,
+          longitude: location.longitude,
+          // horizontal_accuracy Telegram отдаёт не всегда; null честнее нуля —
+          // бот пометит такую отметку как «без данных о точности».
+          accuracy: typeof location.horizontal_accuracy === "number"
+            ? location.horizontal_accuracy
+            : null
+        });
+      });
+    };
+
+    if (manager.isInited) {
+      ask();
+    } else {
+      manager.init(ask);
+    }
+  }
+
+  function start() {
+    if (!insideTelegram) { return; }
+    busy(true);
+    hint.textContent = "Держите телефон под открытым небом или у окна — так GPS точнее.";
+    requestBrowserLocation();
+  }
+
+  button.addEventListener("click", start);
+  retry.addEventListener("click", start);
+})();
+</script>
+
+</body>
+</html>
