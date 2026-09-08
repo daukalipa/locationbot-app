@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Отметка прихода</title>
+<title>Отметка на работе</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   /*
@@ -85,6 +85,15 @@
     font-size: 15px;
   }
 
+  /* Уход — вторичное действие: тот же размер, но контуром, чтобы его нельзя
+     было нажать «на автомате» вместо прихода. */
+  button.outline {
+    margin-top: 10px;
+    background: transparent;
+    color: var(--button);
+    box-shadow: inset 0 0 0 2px var(--button);
+  }
+
   .spinner {
     display: inline-block;
     width: 15px;
@@ -103,14 +112,15 @@
 <body>
 
 <div>
-  <h1>🏥 Отметка прихода</h1>
-  <p class="hint" id="hint">Нажмите кнопку — приложение определит вашу геолокацию и передаст её боту.</p>
+  <h1>🏥 Отметка на работе</h1>
+  <p class="hint" id="hint">Выберите, что отметить — приложение определит вашу геолокацию и передаст её боту.</p>
 </div>
 
 <div class="card" id="status"></div>
 
 <div>
-  <button id="checkin">Отметить приход</button>
+  <button id="checkin">🏥 Пришёл на работу</button>
+  <button id="checkout" class="outline">🚪 Ухожу</button>
   <button class="secondary" id="retry" style="display:none">Попробовать снова</button>
 </div>
 
@@ -120,9 +130,15 @@
 
   var tg = window.Telegram && window.Telegram.WebApp;
   var button = document.getElementById("checkin");
+  var outButton = document.getElementById("checkout");
   var retry = document.getElementById("retry");
   var status = document.getElementById("status");
   var hint = document.getElementById("hint");
+
+  // Что отмечаем: "in" — приход, "out" — уход. В отличие от кнопки в чате,
+  // здесь действие выбирает человек явно, и боту не нужно угадывать его по
+  // состоянию дня.
+  var action = "in";
 
   // Открыто не из Telegram (например, ссылку скопировали в браузер): отправить
   // данные боту оттуда невозможно, поэтому честно говорим об этом сразу, а не
@@ -135,8 +151,9 @@
   }
 
   if (!insideTelegram) {
-    show("Эту страницу нужно открывать кнопкой «📍 Отметить приход» в боте, а не в браузере.", true);
+    show("Эту страницу нужно открывать кнопкой «📍 Отметиться» в боте, а не в браузере.", true);
     button.disabled = true;
+    outButton.disabled = true;
   }
 
   function show(html, isError) {
@@ -146,6 +163,7 @@
 
   function busy(on) {
     button.disabled = on;
+    outButton.disabled = on;
     retry.style.display = "none";
     if (on) {
       show('<span class="spinner"></span>Определяем вашу геолокацию…', false);
@@ -154,6 +172,7 @@
 
   function fail(text) {
     button.disabled = false;
+    outButton.disabled = false;
     retry.style.display = "block";
     show(text, true);
   }
@@ -167,6 +186,7 @@
   */
   function send(coords) {
     var payload = JSON.stringify({
+      action: action,
       lat: coords.latitude,
       lon: coords.longitude,
       accuracy: coords.accuracy
@@ -257,15 +277,19 @@
     }
   }
 
-  function start() {
+  function start(what) {
     if (!insideTelegram) { return; }
+    if (what) { action = what; }
     busy(true);
     hint.textContent = "Держите телефон под открытым небом или у окна — так GPS точнее.";
     requestBrowserLocation();
   }
 
-  button.addEventListener("click", start);
-  retry.addEventListener("click", start);
+  button.addEventListener("click", function () { start("in"); });
+  outButton.addEventListener("click", function () { start("out"); });
+  // Повтор сохраняет ранее выбранное действие: если не получилось отметить
+  // уход, вторая попытка тоже должна быть про уход.
+  retry.addEventListener("click", function () { start(null); });
 })();
 </script>
 
